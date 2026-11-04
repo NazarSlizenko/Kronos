@@ -1,18 +1,24 @@
-const stats = [
-  { label: 'Средняя точность', value: '83.4%' },
-  { label: 'Победные сделки', value: '64%' },
-  { label: 'Средний доход', value: '+12.6%' },
-  { label: 'Открытых сигналов', value: '8' },
-];
+import { useQuery } from '@tanstack/react-query';
 
-const history = [
-  { date: '04.11.2026', ticker: 'BTC-USD', signal: 'Покупка', score: '0.82' },
-  { date: '03.11.2026', ticker: 'ETH-USD', signal: 'Покупка', score: '0.79' },
-  { date: '02.11.2026', ticker: 'NVDA', signal: 'Стабильно', score: '0.71' },
-  { date: '01.11.2026', ticker: 'MSFT', signal: 'Покупка', score: '0.76' },
-];
+import { getPredictions } from '../services/api';
 
 export function AnalyticsPage() {
+  const { data: history = [] } = useQuery({
+    queryKey: ['predictions'],
+    queryFn: getPredictions,
+  });
+
+  const accuracy = history.length
+    ? `${Math.round((history.filter((item: any) => Number(item.change_percent) >= 0).length / history.length) * 100)}%`
+    : '0%';
+
+  const stats = [
+    { label: 'Средняя точность', value: accuracy },
+    { label: 'Победные сделки', value: `${history.filter((item: any) => Number(item.change_percent) >= 0).length}` },
+    { label: 'Средний доход', value: history.length ? `${Math.max(...history.map((item: any) => Number(item.change_percent))).toFixed(1)}%` : '0.0%' },
+    { label: 'Открытых сигналов', value: String(history.length) },
+  ];
+
   return (
     <div className="space-y-8">
       <section>
@@ -42,14 +48,22 @@ export function AnalyticsPage() {
               </tr>
             </thead>
             <tbody>
-              {history.map((row) => (
-                <tr key={`${row.date}-${row.ticker}`} className="border-b border-slate-800 last:border-none">
-                  <td className="py-3 pr-4">{row.date}</td>
-                  <td className="py-3 pr-4">{row.ticker}</td>
-                  <td className="py-3 pr-4 text-emerald-400">{row.signal}</td>
-                  <td className="py-3">{row.score}</td>
+              {history.length ? (
+                history.map((row: any) => (
+                  <tr key={`${row.id}-${row.ticker}`} className="border-b border-slate-800 last:border-none">
+                    <td className="py-3 pr-4">{row.created_at ? new Date(row.created_at).toLocaleDateString('ru-RU') : '—'}</td>
+                    <td className="py-3 pr-4">{row.ticker}</td>
+                    <td className={`py-3 pr-4 ${Number(row.change_percent) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {Number(row.change_percent) >= 0 ? 'Покупка' : 'Продажа'}
+                    </td>
+                    <td className="py-3">{Math.round(Number(row.confidence) * 100)}%</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={4} className="py-8 text-center text-slate-400">Пока нет данных по прогнозам.</td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>

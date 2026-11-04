@@ -1,18 +1,32 @@
 import { useQuery } from '@tanstack/react-query';
-import { getTickerList } from '../services/api';
 
-const summaryCards = [
-  { label: 'Сигнал', value: 'Покупка', accent: 'text-emerald-400' },
-  { label: 'Цена', value: '$59,880', accent: 'text-sky-400' },
-  { label: 'Доверие', value: '82%', accent: 'text-violet-400' },
-  { label: 'Портфель', value: '7 активов', accent: 'text-amber-400' },
-];
+import { getFavorites, getPredictions, getTickerList } from '../services/api';
 
 export function DashboardPage() {
   const { data: tickers = [] } = useQuery({
     queryKey: ['tickers'],
     queryFn: getTickerList,
   });
+
+  const { data: favorites = [] } = useQuery({
+    queryKey: ['favorites'],
+    queryFn: getFavorites,
+  });
+
+  const { data: predictions = [] } = useQuery({
+    queryKey: ['predictions'],
+    queryFn: getPredictions,
+  });
+
+  const latestPrediction = predictions[0];
+  const summaryCards = [
+    { label: 'Сигнал', value: latestPrediction ? (Number(latestPrediction.change_percent) >= 0 ? 'Покупка' : 'Продажа') : 'Ожидание', accent: Number(latestPrediction?.change_percent ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400' },
+    { label: 'Цена', value: latestPrediction ? `$${Number(latestPrediction.latest_price).toLocaleString()}` : '$0', accent: 'text-sky-400' },
+    { label: 'Доверие', value: latestPrediction ? `${Math.round(Number(latestPrediction.confidence) * 100)}%` : '0%', accent: 'text-violet-400' },
+    { label: 'Портфель', value: `${favorites.length || 0} активов`, accent: 'text-amber-400' },
+  ];
+
+  const favoriteRows = favorites.length ? favorites : tickers.slice(0, 4).map((ticker: string) => ({ ticker, label: ticker }));
 
   return (
     <div className="space-y-8">
@@ -37,10 +51,10 @@ export function DashboardPage() {
             <span className="rounded-full bg-violet-500/10 px-3 py-1 text-xs text-violet-300">Live</span>
           </div>
           <div className="mt-5 grid gap-3">
-            {tickers.slice(0, 5).map((ticker: string) => (
-              <div key={ticker} className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/70 px-4 py-3">
-                <span className="font-medium text-slate-100">{ticker}</span>
-                <span className="text-xs text-emerald-400">+2.4%</span>
+            {favoriteRows.map((item: { ticker: string; label?: string }) => (
+              <div key={item.ticker} className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                <span className="font-medium text-slate-100">{item.label ?? item.ticker}</span>
+                <span className="text-xs text-emerald-400">{Number(latestPrediction?.change_percent ?? 0) >= 0 ? '+2.4%' : '-1.1%'}</span>
               </div>
             ))}
           </div>
@@ -49,10 +63,17 @@ export function DashboardPage() {
         <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <h3 className="text-xl font-semibold text-white">Краткая сводка</h3>
           <ul className="mt-5 space-y-4 text-sm text-slate-300">
-            <li className="flex justify-between border-b border-slate-800 pb-2"><span>BTC-USD</span><span className="text-emerald-400">+1.8%</span></li>
-            <li className="flex justify-between border-b border-slate-800 pb-2"><span>ETH-USD</span><span className="text-emerald-400">+1.2%</span></li>
-            <li className="flex justify-between border-b border-slate-800 pb-2"><span>NVDA</span><span className="text-sky-400">+0.9%</span></li>
-            <li className="flex justify-between"><span>MSFT</span><span className="text-violet-400">+0.6%</span></li>
+            {predictions.slice(0, 4).map((item: any) => (
+              <li key={item.id} className="flex justify-between border-b border-slate-800 pb-2">
+                <span>{item.ticker}</span>
+                <span className={Number(item.change_percent) >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                  {Number(item.change_percent).toFixed(2)}%
+                </span>
+              </li>
+            ))}
+            {!predictions.length && (
+              <li className="text-slate-400">Пока нет сохранённых прогнозов.</li>
+            )}
           </ul>
         </div>
       </div>
