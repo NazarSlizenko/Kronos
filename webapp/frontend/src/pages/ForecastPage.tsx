@@ -3,7 +3,13 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
-import { formatMarketPrice, getTickerList, predictTicker, type ForecastPoint } from '../services/api';
+import {
+  formatMarketPrice,
+  getTickerList,
+  predictTicker,
+  type ForecastPoint,
+  type PredictionResponse,
+} from '../services/api';
 
 const defaultForm = {
   ticker: 'BTC-USD',
@@ -15,6 +21,11 @@ const defaultForm = {
 export function ForecastPage() {
   const [form, setForm] = useState(defaultForm);
   const queryClient = useQueryClient();
+  const { data: lastForecast } = useQuery<PredictionResponse | null>({
+    queryKey: ['last-forecast'],
+    queryFn: () => Promise.resolve(null),
+    enabled: false,
+  });
 
   const { data: tickers = [] } = useQuery({
     queryKey: ['tickers'],
@@ -23,13 +34,15 @@ export function ForecastPage() {
 
   const mutation = useMutation({
     mutationFn: predictTicker,
-    onSuccess: async () => {
+    onSuccess: async (prediction) => {
+      queryClient.setQueryData(['last-forecast'], prediction);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['dashboard-predictions'] }),
         queryClient.invalidateQueries({ queryKey: ['analytics-predictions'] }),
       ]);
     },
   });
+  const result = mutation.data ?? lastForecast;
   const errorMessage = isAxiosError<{ detail?: string }>(mutation.error)
     ? mutation.error.response?.data?.detail ?? mutation.error.message
     : mutation.error instanceof Error
@@ -37,11 +50,12 @@ export function ForecastPage() {
       : null;
 
   const chartData = useMemo(() => {
-    const forecast = mutation.data?.forecast ?? [];
-    if (!mutation.data || !forecast.length) {
+    const forecast = result?.forecast ?? [];
+    if (!result || !forecast.length) {
       return [];
     }
 
+    const visibleHistory = result.history.slice(-24);
     const labelFor = (timestamp: string) => new Date(timestamp).toLocaleString('ru-RU', {
       day: '2-digit',
       month: '2-digit',
@@ -49,16 +63,16 @@ export function ForecastPage() {
       minute: '2-digit',
     });
     return [
-      ...mutation.data.history.map((point) => ({
+      ...visibleHistory.map((point) => ({
         label: labelFor(point.timestamp),
         actualClose: Number(point.close),
         forecastClose: null,
       })),
-      ...(mutation.data.history.length
+      ...(visibleHistory.length
         ? [{
-            label: labelFor(mutation.data.latest_timestamp),
-            actualClose: Number(mutation.data.latest_price),
-            forecastClose: Number(mutation.data.latest_price),
+            label: labelFor(result.latest_timestamp),
+            actualClose: Number(result.latest_price),
+            forecastClose: Number(result.latest_price),
           }]
         : []),
       ...forecast.map((point: ForecastPoint) => ({
@@ -67,7 +81,7 @@ export function ForecastPage() {
         forecastClose: Number(point.close),
       })),
     ];
-  }, [mutation.data]);
+  }, [result]);
 
   const priceDomain = useMemo((): [number, number] | ['auto', 'auto'] => {
     const prices = chartData.flatMap((point) => [point.actualClose, point.forecastClose])
@@ -84,7 +98,7 @@ export function ForecastPage() {
 
   const formatPriceTick = (value: number) => {
     const formatted = Number(value).toLocaleString('ru-RU', { maximumFractionDigits: 2 });
-    return form.ticker.endsWith('=X') ? formatted : `$${formatted}`;
+    return result?.ticker.endsWith('=X') ? formatted : `$${formatted}`;
   };
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
@@ -93,7 +107,7 @@ export function ForecastPage() {
   };
 
   const handleDownloadCsv = () => {
-    const rows = mutation.data?.forecast ?? [];
+    const rows = result?.forecast ?? [];
     if (!rows.length) {
       return;
     }
@@ -113,7 +127,7 @@ export function ForecastPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${form.ticker}-forecast.csv`;
+    link.download = `${result?.ticker ?? form.ticker}-forecast.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -204,9 +218,12 @@ export function ForecastPage() {
         <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-xl font-semibold text-white">История цены и прогноз Kronos</h3>
-            {mutation.data ? (
-              <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs text-emerald-300">
-                Точность не калибрована
+            {result ? (
+              <span
+                className="rounded-full bg-amber-500/10 px-3 py-1 text-xs text-amber-300"
+                title="Точность можно измерить после завершения горизонта прогноза, сравнив прогнозную цену с фактической."
+              >
+                Ожидает проверки
               </span>
             ) : (
               <span className="rounded-full bg-slate-700 px-3 py-1 text-xs text-slate-300">Ожидание данных</span>
@@ -239,6 +256,13 @@ export function ForecastPage() {
               <div className="flex h-full items-center justify-center text-slate-400">Пустой график. Запустите прогноз.</div>
             )}
           </div>
+          {result && (
+            <p className="mt-3 text-xs text-slate-400">
+              На графике показаны последние 24 исторические свечи. Точность ещё не измерена:
+              после закрытия горизонта откройте «Аналитику» и нажмите «Обновить фактические результаты».
+              Приложение сравнит прогноз с рынком; параметры Kronos при этом автоматически не калибруются.
+            </p>
+          )}
         </div>
       </div>
 
@@ -248,32 +272,32 @@ export function ForecastPage() {
         </p>
       )}
 
-      {mutation.data && (
+      {result && (
         <div className="grid gap-4 md:grid-cols-3">
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
             <p className="text-sm text-slate-400">Последняя фактическая цена закрытия</p>
             <p className="mt-2 text-2xl font-semibold text-white">
-              {formatMarketPrice(mutation.data.ticker, mutation.data.latest_price)}
+              {formatMarketPrice(result.ticker, result.latest_price)}
             </p>
             <p className="mt-2 text-xs text-slate-500">
-              {new Date(mutation.data.latest_timestamp).toLocaleString('ru-RU')}
+              {new Date(result.latest_timestamp).toLocaleString('ru-RU')}
             </p>
-            <p className="mt-1 text-xs text-slate-500">{mutation.data.data_source}</p>
+            <p className="mt-1 text-xs text-slate-500">{result.data_source}</p>
           </div>
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
             <p className="text-sm text-slate-400">Изменение за горизонт прогноза</p>
-            <p className={`mt-2 text-2xl font-semibold ${Number(mutation.data.change_percent) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {Number(mutation.data.change_percent).toFixed(2)}%
+            <p className={`mt-2 text-2xl font-semibold ${Number(result.change_percent) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {Number(result.change_percent).toFixed(2)}%
             </p>
           </div>
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-            <p className="text-sm text-slate-400">Фактическая точность</p>
-            <p className="mt-2 text-2xl font-semibold text-violet-400">Не измерена</p>
+            <p className="text-sm text-slate-400">Проверка точности</p>
+            <p className="mt-2 text-2xl font-semibold text-amber-300">Ожидает фактических данных</p>
           </div>
         </div>
       )}
 
-      {mutation.data?.forecast?.length ? (
+      {result?.forecast?.length ? (
         <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="text-xl font-semibold text-white">Таблица прогноза</h3>
@@ -299,7 +323,7 @@ export function ForecastPage() {
                 </tr>
               </thead>
               <tbody>
-                {mutation.data.forecast.map((row: ForecastPoint, index: number) => (
+                {result.forecast.map((row: ForecastPoint, index: number) => (
                   <tr key={`${row.timestamp}-${index}`} className="border-b border-slate-800 last:border-none">
                     <td className="py-3 pr-4">{new Date(row.timestamp).toLocaleString('ru-RU')}</td>
                     <td className="py-3 pr-4">{Number(row.open).toFixed(2)}</td>

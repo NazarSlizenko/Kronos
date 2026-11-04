@@ -144,7 +144,10 @@ function PredictionChart({ prediction }: { prediction: PredictionRecord }) {
         </p>
       )}
 
-      <div className="h-80 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+      <div
+        className="h-80 rounded-xl border border-slate-800 bg-slate-950/60 p-3"
+        style={{ height: 320, minHeight: 320 }}
+      >
         {chartData.length ? (
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 10, right: 12, left: 12, bottom: 10 }}>
@@ -446,6 +449,7 @@ export function AnalyticsPage() {
       {selectedPrediction && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70 p-4"
+          style={{ position: 'fixed', inset: 0, overflowY: 'auto' }}
           role="presentation"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
