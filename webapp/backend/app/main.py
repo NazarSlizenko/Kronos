@@ -13,7 +13,7 @@ from app.config import settings
 from app.database import SessionLocal, init_db
 from app.models import FavoriteTicker, Prediction, User
 from app.services.backtest_service import BacktestService
-from app.services.data_service import DataService
+from app.services.data_service import DataService, MarketDataError
 from app.services.kronos_service import KronosService
 
 
@@ -27,6 +27,7 @@ class PredictRequest(BaseModel):
 class PredictResponse(BaseModel):
     ticker: str
     latest_price: float
+    latest_timestamp: str
     change_percent: float
     confidence: float
     forecast: list[dict]
@@ -170,8 +171,13 @@ async def remove_favorite(ticker: str, username: str = Depends(get_current_user)
 async def predict(request: PredictRequest, username: str = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
         data = app.state.data_service.get_market_data(request.ticker, request.period, request.interval)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+    try:
         forecast = app.state.kronos_service.predict(data, pred_len=request.pred_len)
         last_close = float(data["close"].iloc[-1])
+        latest_timestamp = data["timestamps"].iloc[-1].isoformat()
         first_forecast_close = float(forecast["close"].iloc[0])
         change_percent = ((first_forecast_close - last_close) / last_close) * 100 if last_close else 0.0
         latest_price = last_close
@@ -179,6 +185,7 @@ async def predict(request: PredictRequest, username: str = Depends(get_current_u
         response = {
             "ticker": request.ticker,
             "latest_price": latest_price,
+            "latest_timestamp": latest_timestamp,
             "change_percent": change_percent,
             "confidence": confidence,
             "forecast": [
@@ -216,6 +223,10 @@ async def predict(request: PredictRequest, username: str = Depends(get_current_u
 async def backtest(request: BacktestRequest, username: str = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
         data = app.state.data_service.get_market_data(request.ticker, request.period, request.interval)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+    try:
         result = app.state.backtest_service.run_backtest(data, strategy=request.strategy)
         return result
     except Exception as exc:

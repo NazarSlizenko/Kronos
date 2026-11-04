@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios';
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -22,6 +23,11 @@ export function ForecastPage() {
   const mutation = useMutation({
     mutationFn: predictTicker,
   });
+  const errorMessage = isAxiosError<{ detail?: string }>(mutation.error)
+    ? mutation.error.response?.data?.detail ?? mutation.error.message
+    : mutation.error instanceof Error
+      ? mutation.error.message
+      : null;
 
   const chartData = useMemo(() => {
     const forecast = mutation.data?.forecast ?? [];
@@ -166,11 +172,20 @@ export function ForecastPage() {
         </div>
       </div>
 
+      {mutation.isError && (
+        <p role="alert" className="rounded-xl border border-rose-900 bg-rose-950/50 p-4 text-sm text-rose-200">
+          Не удалось получить прогноз: {errorMessage ?? 'неизвестная ошибка'}
+        </p>
+      )}
+
       {mutation.data && (
         <div className="grid gap-4 md:grid-cols-3">
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-            <p className="text-sm text-slate-400">Последняя цена</p>
+            <p className="text-sm text-slate-400">Цена закрытия последней свечи</p>
             <p className="mt-2 text-2xl font-semibold text-white">${Number(mutation.data.latest_price).toLocaleString()}</p>
+            <p className="mt-2 text-xs text-slate-500">
+              {new Date(mutation.data.latest_timestamp).toLocaleString('ru-RU')}
+            </p>
           </div>
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
             <p className="text-sm text-slate-400">Изменение</p>

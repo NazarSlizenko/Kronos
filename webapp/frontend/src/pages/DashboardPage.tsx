@@ -21,7 +21,7 @@ export function DashboardPage() {
   const latestPrediction = predictions[0];
   const summaryCards = [
     { label: 'Сигнал', value: latestPrediction ? (Number(latestPrediction.change_percent) >= 0 ? 'Покупка' : 'Продажа') : 'Ожидание', accent: Number(latestPrediction?.change_percent ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400' },
-    { label: 'Цена', value: latestPrediction ? `$${Number(latestPrediction.latest_price).toLocaleString()}` : '$0', accent: 'text-sky-400' },
+    { label: 'Цена при прогнозе', value: latestPrediction ? `$${Number(latestPrediction.latest_price).toLocaleString()}` : '—', accent: 'text-sky-400' },
     { label: 'Доверие', value: latestPrediction ? `${Math.round(Number(latestPrediction.confidence) * 100)}%` : '0%', accent: 'text-violet-400' },
     { label: 'Портфель', value: `${favorites.length || 0} активов`, accent: 'text-amber-400' },
   ];
