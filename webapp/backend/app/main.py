@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+import pandas as pd
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -35,6 +37,7 @@ class PredictResponse(BaseModel):
     data_source: str
     change_percent: float
     confidence: float | None
+    evaluation: dict[str, str | float]
     forecast: list[dict]
 
 
@@ -53,6 +56,91 @@ class BacktestRequest(BaseModel):
     period: MarketPeriod = "1mo"
     interval: MarketInterval = "1h"
     strategy: str = Field(default="momentum")
+
+
+def parse_market_timestamp(value: str) -> pd.Timestamp:
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is None:
+        return timestamp.tz_localize("UTC")
+    return timestamp.tz_convert("UTC")
+
+
+def evaluate_pending_predictions(db: Session) -> dict[str, int]:
+    records = (
+        db.query(Prediction)
+        .filter(Prediction.status == "awaiting_actual")
+        .order_by(Prediction.created_at.asc())
+        .limit(50)
+        .all()
+    )
+    now = pd.Timestamp.now(tz="UTC")
+    evaluated = 0
+    checked = 0
+    errors = []
+    grouped: dict[tuple[str, str], list[tuple[Prediction, dict]]] = {}
+
+    for record in records:
+        try:
+            summary = json.loads(record.result_summary or "{}")
+            evaluation = summary.get("evaluation")
+            target_value = evaluation.get("target_timestamp") if isinstance(evaluation, dict) else None
+            if not target_value:
+                record.status = "not_evaluable"
+                continue
+            target_timestamp = parse_market_timestamp(target_value)
+            if target_timestamp > now:
+                continue
+            grouped.setdefault((record.ticker, record.interval), []).append((record, summary))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            record.status = "not_evaluable"
+
+    for (ticker, interval), pending_records in grouped.items():
+        try:
+            data = app.state.data_service.get_market_data(ticker, "1y", interval)
+        except MarketDataError as exc:
+            checked += len(pending_records)
+            errors.append({"ticker": ticker, "detail": str(exc)})
+            continue
+
+        timestamps = pd.to_datetime(data["timestamps"], utc=True)
+        for record, summary in pending_records:
+            evaluation = summary["evaluation"]
+            target_timestamp = parse_market_timestamp(evaluation["target_timestamp"])
+            actual_rows = data.loc[timestamps >= target_timestamp]
+            if actual_rows.empty:
+                continue
+
+            actual = actual_rows.iloc[0]
+            actual_price = float(actual["close"])
+            base_price = float(record.latest_price or 0)
+            predicted_price = float(evaluation["predicted_price"])
+            if base_price <= 0:
+                record.status = "not_evaluable"
+                continue
+
+            predicted_change = ((predicted_price - base_price) / base_price) * 100
+            actual_change = ((actual_price - base_price) / base_price) * 100
+            evaluation.update({
+                "status": "evaluated",
+                "actual_timestamp": actual["timestamps"].isoformat(),
+                "actual_price": actual_price,
+                "actual_change_percent": actual_change,
+                "absolute_error_percent": abs(predicted_change - actual_change),
+                "direction_correct": (
+                    (predicted_change > 0 and actual_change > 0)
+                    or (predicted_change < 0 and actual_change < 0)
+                    or (predicted_change == 0 and actual_change == 0)
+                ),
+                "evaluated_at": datetime.now(timezone.utc).isoformat(),
+            })
+            summary["evaluation"] = evaluation
+            record.result_summary = json.dumps(summary)
+            record.status = "evaluated"
+            evaluated += 1
+            checked += 1
+
+    db.commit()
+    return {"checked": checked, "evaluated": evaluated, "errors": errors}
 
 
 def get_db():
@@ -167,9 +255,18 @@ async def list_predictions(username: str = Depends(get_current_user), db: Sessio
             "confidence": item.confidence,
             "status": item.status,
             "created_at": item.created_at.isoformat() if item.created_at else None,
+            "evaluation": summary.get("evaluation"),
             "result_summary": summary or None,
         })
     return predictions
+
+
+@app.post("/api/predictions/evaluate")
+async def evaluate_predictions(
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return evaluate_pending_predictions(db)
 
 
 @app.get("/api/favorites")
@@ -228,6 +325,12 @@ async def predict(request: PredictRequest, username: str = Depends(get_current_u
             "data_source": data_source,
             "change_percent": change_percent,
             "confidence": confidence,
+            "evaluation": {
+                "status": "awaiting_actual",
+                "target_timestamp": str(forecast.index[-1]),
+                "predicted_price": final_forecast_close,
+                "predicted_change_percent": change_percent,
+            },
             "forecast": [
                 {
                     "timestamp": str(idx),
@@ -248,7 +351,7 @@ async def predict(request: PredictRequest, username: str = Depends(get_current_u
             latest_price=latest_price,
             change_percent=change_percent,
             confidence=confidence,
-            status="completed",
+            status="awaiting_actual",
             result_summary=json.dumps(response),
         )
         db.add(record)

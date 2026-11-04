@@ -75,10 +75,46 @@ export const getFavorites = async () => {
   return response.data ?? [];
 };
 
-export const getPredictions = async () => {
+export interface PredictionEvaluation {
+  status: 'awaiting_actual' | 'evaluated';
+  target_timestamp: string;
+  predicted_price: number;
+  predicted_change_percent: number;
+  actual_timestamp?: string;
+  actual_price?: number;
+  actual_change_percent?: number;
+  absolute_error_percent?: number;
+  direction_correct?: boolean;
+}
+
+export interface PredictionRecord {
+  id: number;
+  ticker: string;
+  period: string;
+  interval: string;
+  latest_price: number | null;
+  latest_timestamp?: string | null;
+  data_source?: string | null;
+  change_percent: number | null;
+  status: string;
+  created_at?: string | null;
+  evaluation?: PredictionEvaluation | null;
+}
+
+export const getPredictions = async (): Promise<PredictionRecord[]> => {
   const headers = await authHeaders();
   const response = await api.get('/api/predictions', { headers });
   return response.data ?? [];
+};
+
+export const evaluatePredictions = async () => {
+  const headers = await authHeaders();
+  const response = await api.post('/api/predictions/evaluate', {}, { headers });
+  return response.data as {
+    checked: number;
+    evaluated: number;
+    errors: { ticker: string; detail: string }[];
+  };
 };
 
 export interface ForecastPoint {
@@ -98,6 +134,7 @@ export interface PredictionResponse {
   data_source: string;
   change_percent: number;
   confidence: number | null;
+  evaluation: PredictionEvaluation;
   forecast: ForecastPoint[];
 }
 

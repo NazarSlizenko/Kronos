@@ -3,9 +3,15 @@ import unittest
 from unittest.mock import Mock, patch
 
 import pandas as pd
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 import app.services.data_service as data_module
 import app.services.kronos_service as kronos_module
+import app.main as main_module
+from app.database import Base
+from app.models import Prediction
 from app.services.data_service import DataService, MarketDataError
 from app.services.kronos_service import KronosService
 
@@ -263,3 +269,90 @@ class KronosServiceTests(unittest.TestCase):
         self.assertIsInstance(captured["x_timestamp"], pd.Series)
         self.assertEqual(captured["sample_count"], 5)
         self.assertEqual(forecast.index[1] - forecast.index[0], pd.Timedelta(hours=4))
+
+
+class PredictionEvaluationTests(unittest.TestCase):
+    def setUp(self):
+        self.engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(bind=self.engine)
+        self.session = sessionmaker(bind=self.engine)()
+        self.addCleanup(self.engine.dispose)
+        self.addCleanup(self.session.close)
+
+    def test_evaluates_mature_forecast_against_first_completed_candle(self):
+        target = pd.Timestamp.now(tz="UTC").floor("h") - pd.Timedelta(hours=2)
+        prediction = Prediction(
+            ticker="BTC-USD",
+            period="5d",
+            interval="1h",
+            latest_price=100.0,
+            change_percent=10.0,
+            status="awaiting_actual",
+            result_summary=json.dumps({
+                "evaluation": {
+                    "status": "awaiting_actual",
+                    "target_timestamp": target.isoformat(),
+                    "predicted_price": 110.0,
+                    "predicted_change_percent": 10.0,
+                },
+            }),
+        )
+        self.session.add(prediction)
+        self.session.commit()
+
+        class FakeDataService:
+            def get_market_data(self, ticker, period, interval):
+                return pd.DataFrame({
+                    "timestamps": pd.to_datetime([
+                        target - pd.Timedelta(hours=1),
+                        target,
+                        target + pd.Timedelta(hours=1),
+                    ], utc=True),
+                    "close": [99.0, 105.0, 107.0],
+                })
+
+        with patch.object(main_module.app.state, "data_service", FakeDataService(), create=True):
+            result = main_module.evaluate_pending_predictions(self.session)
+
+        evaluated = self.session.query(Prediction).one()
+        summary = json.loads(evaluated.result_summary)
+        self.assertEqual(result, {"checked": 1, "evaluated": 1, "errors": []})
+        self.assertEqual(evaluated.status, "evaluated")
+        self.assertEqual(summary["evaluation"]["actual_price"], 105.0)
+        self.assertEqual(summary["evaluation"]["actual_change_percent"], 5.0)
+        self.assertEqual(summary["evaluation"]["absolute_error_percent"], 5.0)
+        self.assertTrue(summary["evaluation"]["direction_correct"])
+
+    def test_does_not_evaluate_prediction_before_its_target(self):
+        target = pd.Timestamp.now(tz="UTC").floor("h") + pd.Timedelta(hours=2)
+        self.session.add(Prediction(
+            ticker="BTC-USD",
+            period="5d",
+            interval="1h",
+            latest_price=100.0,
+            change_percent=10.0,
+            status="awaiting_actual",
+            result_summary=json.dumps({
+                "evaluation": {
+                    "status": "awaiting_actual",
+                    "target_timestamp": target.isoformat(),
+                    "predicted_price": 110.0,
+                    "predicted_change_percent": 10.0,
+                },
+            }),
+        ))
+        self.session.commit()
+
+        class UnusedDataService:
+            def get_market_data(self, ticker, period, interval):
+                raise AssertionError("Future forecasts must not trigger market evaluation")
+
+        with patch.object(main_module.app.state, "data_service", UnusedDataService(), create=True):
+            result = main_module.evaluate_pending_predictions(self.session)
+
+        self.assertEqual(result, {"checked": 0, "evaluated": 0, "errors": []})
+        self.assertEqual(self.session.query(Prediction).one().status, "awaiting_actual")
