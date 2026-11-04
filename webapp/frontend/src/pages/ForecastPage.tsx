@@ -3,11 +3,11 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
-import { getTickerList, predictTicker } from '../services/api';
+import { formatMarketPrice, getTickerList, predictTicker, type ForecastPoint } from '../services/api';
 
 const defaultForm = {
   ticker: 'BTC-USD',
-  period: '7d',
+  period: '5d',
   interval: '1h',
   pred_len: 12,
 };
@@ -31,16 +31,33 @@ export function ForecastPage() {
 
   const chartData = useMemo(() => {
     const forecast = mutation.data?.forecast ?? [];
-    return forecast.map((point: any) => ({
+    if (!mutation.data || !forecast.length) {
+      return [];
+    }
+
+    const observedTimestamp = new Date(mutation.data.latest_timestamp).toLocaleString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    return [
+      {
+        label: observedTimestamp,
+        actualClose: Number(mutation.data.latest_price),
+        forecastClose: Number(mutation.data.latest_price),
+      },
+      ...forecast.map((point: ForecastPoint) => ({
       label: new Date(point.timestamp).toLocaleString('ru-RU', {
         day: '2-digit',
         month: '2-digit',
         hour: '2-digit',
         minute: '2-digit',
       }),
-      close: Number(point.close),
-      volume: Number(point.volume),
-    }));
+        actualClose: null,
+        forecastClose: Number(point.close),
+      })),
+    ];
   }, [mutation.data]);
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
@@ -120,6 +137,21 @@ export function ForecastPage() {
             </label>
 
             <label className="block">
+              <span className="mb-2 block text-sm text-slate-300">Период данных</span>
+              <select
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-500"
+                value={form.period}
+                onChange={(event) => setForm({ ...form, period: event.target.value })}
+              >
+                <option value="5d">5 дней</option>
+                <option value="1mo">1 месяц</option>
+                <option value="3mo">3 месяца</option>
+                <option value="6mo">6 месяцев</option>
+                <option value="1y">1 год</option>
+              </select>
+            </label>
+
+            <label className="block">
               <span className="mb-2 block text-sm text-slate-300">Длина прогноза: {form.pred_len}</span>
               <input
                 type="range"
@@ -144,10 +176,10 @@ export function ForecastPage() {
 
         <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <div className="flex items-center justify-between gap-3">
-            <h3 className="text-xl font-semibold text-white">История и прогноз</h3>
+            <h3 className="text-xl font-semibold text-white">Котировка и прогноз</h3>
             {mutation.data ? (
               <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs text-emerald-300">
-                Доверие {Number(mutation.data.confidence * 100).toFixed(0)}%
+                Точность не калибрована
               </span>
             ) : (
               <span className="rounded-full bg-slate-700 px-3 py-1 text-xs text-slate-300">Ожидание данных</span>
@@ -162,7 +194,8 @@ export function ForecastPage() {
                   <XAxis dataKey="label" stroke="#94a3b8" tick={{ fontSize: 10 }} />
                   <YAxis stroke="#94a3b8" tick={{ fontSize: 10 }} />
                   <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 12 }} />
-                  <Line type="monotone" dataKey="close" stroke="#8b5cf6" strokeWidth={3} dot={false} />
+                  <Line type="monotone" dataKey="actualClose" name="Последняя свеча" stroke="#38bdf8" strokeWidth={2} dot={{ r: 4 }} connectNulls={false} />
+                  <Line type="monotone" dataKey="forecastClose" name="Прогноз Kronos" stroke="#8b5cf6" strokeWidth={3} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             ) : (
@@ -182,20 +215,23 @@ export function ForecastPage() {
         <div className="grid gap-4 md:grid-cols-3">
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
             <p className="text-sm text-slate-400">Цена закрытия последней свечи</p>
-            <p className="mt-2 text-2xl font-semibold text-white">${Number(mutation.data.latest_price).toLocaleString()}</p>
+            <p className="mt-2 text-2xl font-semibold text-white">
+              {formatMarketPrice(mutation.data.ticker, mutation.data.latest_price)}
+            </p>
             <p className="mt-2 text-xs text-slate-500">
               {new Date(mutation.data.latest_timestamp).toLocaleString('ru-RU')}
             </p>
+            <p className="mt-1 text-xs text-slate-500">{mutation.data.data_source}</p>
           </div>
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-            <p className="text-sm text-slate-400">Изменение</p>
+            <p className="text-sm text-slate-400">Изменение за горизонт прогноза</p>
             <p className={`mt-2 text-2xl font-semibold ${Number(mutation.data.change_percent) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
               {Number(mutation.data.change_percent).toFixed(2)}%
             </p>
           </div>
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-            <p className="text-sm text-slate-400">Уверенность</p>
-            <p className="mt-2 text-2xl font-semibold text-violet-400">{Number(mutation.data.confidence * 100).toFixed(0)}%</p>
+            <p className="text-sm text-slate-400">Фактическая точность</p>
+            <p className="mt-2 text-2xl font-semibold text-violet-400">Не измерена</p>
           </div>
         </div>
       )}
@@ -226,7 +262,7 @@ export function ForecastPage() {
                 </tr>
               </thead>
               <tbody>
-                {mutation.data.forecast.map((row: any, index: number) => (
+                {mutation.data.forecast.map((row: ForecastPoint, index: number) => (
                   <tr key={`${row.timestamp}-${index}`} className="border-b border-slate-800 last:border-none">
                     <td className="py-3 pr-4">{new Date(row.timestamp).toLocaleString('ru-RU')}</td>
                     <td className="py-3 pr-4">{Number(row.open).toFixed(2)}</td>

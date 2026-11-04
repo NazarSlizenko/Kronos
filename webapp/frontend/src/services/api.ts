@@ -45,6 +45,30 @@ export const getTickerList = async () => {
   return response.data.tickers ?? [];
 };
 
+export interface MarketQuote {
+  ticker: string;
+  latest_price: number;
+  latest_timestamp: string;
+  interval: string;
+  data_source: string;
+}
+
+export const formatMarketPrice = (ticker: string, price: number) => {
+  const formatted = Number(price).toLocaleString('ru-RU', { maximumFractionDigits: 4 });
+  return ticker.toUpperCase().endsWith('=X') ? formatted : `$${formatted}`;
+};
+
+export const getLatestMarketQuote = async (
+  ticker: string,
+): Promise<MarketQuote> => {
+  const headers = await authHeaders();
+  const response = await api.get(`/api/market/${encodeURIComponent(ticker)}`, {
+    headers,
+    params: { period: '5d', interval: '1h' },
+  });
+  return response.data;
+};
+
 export const getFavorites = async () => {
   const headers = await authHeaders();
   const response = await api.get('/api/favorites', { headers });
@@ -57,12 +81,32 @@ export const getPredictions = async () => {
   return response.data ?? [];
 };
 
+export interface ForecastPoint {
+  timestamp: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  amount: number;
+}
+
+export interface PredictionResponse {
+  ticker: string;
+  latest_price: number;
+  latest_timestamp: string;
+  data_source: string;
+  change_percent: number;
+  confidence: number | null;
+  forecast: ForecastPoint[];
+}
+
 export const predictTicker = async (payload: {
   ticker: string;
   period: string;
   interval: string;
   pred_len: number;
-}) => {
+}): Promise<PredictionResponse> => {
   const headers = await authHeaders();
   const response = await api.post('/api/predict', payload, { headers });
   return response.data;

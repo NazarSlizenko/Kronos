@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 
-import { getPredictions } from '../services/api';
+import { formatMarketPrice, getPredictions } from '../services/api';
 
 export function AnalyticsPage() {
   const { data: history = [] } = useQuery({
@@ -8,15 +8,17 @@ export function AnalyticsPage() {
     queryFn: getPredictions,
   });
 
-  const accuracy = history.length
-    ? `${Math.round((history.filter((item: any) => Number(item.change_percent) >= 0).length / history.length) * 100)}%`
-    : '0%';
+  const verifiedHistory = history.filter((item: any) => Boolean(item.data_source));
+  const averageForecastChange = verifiedHistory.length
+    ? verifiedHistory.reduce((total: number, item: any) => total + Number(item.change_percent), 0) / verifiedHistory.length
+    : 0;
+  const upwardForecasts = verifiedHistory.filter((item: any) => Number(item.change_percent) > 0).length;
 
   const stats = [
-    { label: 'Средняя точность', value: accuracy },
-    { label: 'Победные сделки', value: `${history.filter((item: any) => Number(item.change_percent) >= 0).length}` },
-    { label: 'Средний доход', value: history.length ? `${Math.max(...history.map((item: any) => Number(item.change_percent))).toFixed(1)}%` : '0.0%' },
-    { label: 'Открытых сигналов', value: String(history.length) },
+    { label: 'Сохранено прогнозов', value: String(history.length) },
+    { label: 'С прогнозом и источником', value: String(verifiedHistory.length) },
+    { label: 'Среднее изменение прогноза', value: verifiedHistory.length ? `${averageForecastChange.toFixed(2)}%` : '—' },
+    { label: 'Прогнозов на рост', value: String(upwardForecasts) },
   ];
 
   return (
@@ -43,8 +45,12 @@ export function AnalyticsPage() {
               <tr className="border-b border-slate-800 text-slate-400">
                 <th className="pb-3 pr-4 font-medium">Дата</th>
                 <th className="pb-3 pr-4 font-medium">Тикер</th>
-                <th className="pb-3 pr-4 font-medium">Сигнал</th>
-                <th className="pb-3 font-medium">Уверенность</th>
+                <th className="pb-3 pr-4 font-medium">Цена исходной свечи</th>
+                <th className="pb-3 pr-4 font-medium">Свеча по времени</th>
+                <th className="pb-3 pr-4 font-medium">Источник</th>
+                <th className="pb-3 pr-4 font-medium">Направление</th>
+                <th className="pb-3 pr-4 font-medium">Изменение</th>
+                <th className="pb-3 font-medium">Фактическая точность</th>
               </tr>
             </thead>
             <tbody>
@@ -53,15 +59,25 @@ export function AnalyticsPage() {
                   <tr key={`${row.id}-${row.ticker}`} className="border-b border-slate-800 last:border-none">
                     <td className="py-3 pr-4">{row.created_at ? new Date(row.created_at).toLocaleDateString('ru-RU') : '—'}</td>
                     <td className="py-3 pr-4">{row.ticker}</td>
-                    <td className={`py-3 pr-4 ${Number(row.change_percent) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                      {Number(row.change_percent) >= 0 ? 'Покупка' : 'Продажа'}
+                    <td className="py-3 pr-4">
+                      {row.data_source && row.latest_price !== null
+                        ? formatMarketPrice(row.ticker, Number(row.latest_price))
+                        : '—'}
                     </td>
-                    <td className="py-3">{Math.round(Number(row.confidence) * 100)}%</td>
+                    <td className="py-3 pr-4">
+                      {row.latest_timestamp ? new Date(row.latest_timestamp).toLocaleString('ru-RU') : 'Не сохранено'}
+                    </td>
+                    <td className="py-3 pr-4">{row.data_source ?? 'Не сохранён'}</td>
+                    <td className={`py-3 pr-4 ${!row.data_source ? 'text-slate-500' : Number(row.change_percent) > 0 ? 'text-emerald-400' : Number(row.change_percent) < 0 ? 'text-rose-400' : 'text-slate-400'}`}>
+                      {!row.data_source ? 'Не подтверждён' : Number(row.change_percent) > 0 ? 'Рост' : Number(row.change_percent) < 0 ? 'Снижение' : 'Без изменения'}
+                    </td>
+                    <td className="py-3 pr-4">{row.data_source ? `${Number(row.change_percent).toFixed(2)}%` : '—'}</td>
+                    <td className="py-3">Не измерена</td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={4} className="py-8 text-center text-slate-400">Пока нет данных по прогнозам.</td>
+                  <td colSpan={8} className="py-8 text-center text-slate-400">Пока нет данных по прогнозам.</td>
                 </tr>
               )}
             </tbody>

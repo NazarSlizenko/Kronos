@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,11 +17,14 @@ from app.services.backtest_service import BacktestService
 from app.services.data_service import DataService, MarketDataError
 from app.services.kronos_service import KronosService
 
+MarketInterval = Literal["1h", "4h", "1d"]
+MarketPeriod = Literal["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]
+
 
 class PredictRequest(BaseModel):
     ticker: str = Field(..., min_length=1)
-    period: str = Field(default="60d")
-    interval: str = Field(default="1h")
+    period: MarketPeriod = "1mo"
+    interval: MarketInterval = "1h"
     pred_len: int = Field(default=24, ge=1, le=168)
 
 
@@ -28,8 +32,9 @@ class PredictResponse(BaseModel):
     ticker: str
     latest_price: float
     latest_timestamp: str
+    data_source: str
     change_percent: float
-    confidence: float
+    confidence: float | None
     forecast: list[dict]
 
 
@@ -45,8 +50,8 @@ class FavoriteRequest(BaseModel):
 
 class BacktestRequest(BaseModel):
     ticker: str = Field(..., min_length=1)
-    period: str = Field(default="30d")
-    interval: str = Field(default="1h")
+    period: MarketPeriod = "1mo"
+    interval: MarketInterval = "1h"
     strategy: str = Field(default="momentum")
 
 
@@ -101,6 +106,28 @@ async def get_tickers():
     return {"tickers": ["BTC-USD", "ETH-USD", "AAPL", "MSFT", "NVDA", "GOOGL", "TSLA", "EURUSD=X", "GBPUSD=X"]}
 
 
+@app.get("/api/market/{ticker}")
+async def get_latest_market_quote(
+    ticker: str,
+    period: MarketPeriod = "5d",
+    interval: MarketInterval = "1h",
+    username: str = Depends(get_current_user),
+):
+    try:
+        data = app.state.data_service.get_market_data(ticker, period, interval)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+    latest = data.iloc[-1]
+    return {
+        "ticker": ticker.upper(),
+        "latest_price": float(latest["close"]),
+        "latest_timestamp": latest["timestamps"].isoformat(),
+        "interval": interval,
+        "data_source": str(data.attrs["source"]),
+    }
+
+
 @app.post("/api/auth/login")
 async def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == payload.username).first()
@@ -125,18 +152,24 @@ async def me(username: str = Depends(get_current_user), db: Session = Depends(ge
 @app.get("/api/predictions")
 async def list_predictions(username: str = Depends(get_current_user), db: Session = Depends(get_db)):
     records = db.query(Prediction).order_by(Prediction.created_at.desc()).all()
-    return [{
-        "id": item.id,
-        "ticker": item.ticker,
-        "period": item.period,
-        "interval": item.interval,
-        "latest_price": item.latest_price,
-        "change_percent": item.change_percent,
-        "confidence": item.confidence,
-        "status": item.status,
-        "created_at": item.created_at.isoformat() if item.created_at else None,
-        "result_summary": json.loads(item.result_summary) if item.result_summary else None,
-    } for item in records]
+    predictions = []
+    for item in records:
+        summary = json.loads(item.result_summary) if item.result_summary else {}
+        predictions.append({
+            "id": item.id,
+            "ticker": item.ticker,
+            "period": item.period,
+            "interval": item.interval,
+            "latest_price": item.latest_price,
+            "latest_timestamp": summary.get("latest_timestamp"),
+            "data_source": summary.get("data_source"),
+            "change_percent": item.change_percent,
+            "confidence": item.confidence,
+            "status": item.status,
+            "created_at": item.created_at.isoformat() if item.created_at else None,
+            "result_summary": summary or None,
+        })
+    return predictions
 
 
 @app.get("/api/favorites")
@@ -175,17 +208,24 @@ async def predict(request: PredictRequest, username: str = Depends(get_current_u
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
     try:
-        forecast = app.state.kronos_service.predict(data, pred_len=request.pred_len)
+        forecast = app.state.kronos_service.predict(
+            data,
+            pred_len=request.pred_len,
+            interval=request.interval,
+            ticker=request.ticker,
+        )
         last_close = float(data["close"].iloc[-1])
         latest_timestamp = data["timestamps"].iloc[-1].isoformat()
-        first_forecast_close = float(forecast["close"].iloc[0])
-        change_percent = ((first_forecast_close - last_close) / last_close) * 100 if last_close else 0.0
+        final_forecast_close = float(forecast["close"].iloc[-1])
+        change_percent = ((final_forecast_close - last_close) / last_close) * 100 if last_close else 0.0
         latest_price = last_close
-        confidence = 0.82
+        data_source = str(data.attrs["source"])
+        confidence = None
         response = {
             "ticker": request.ticker,
             "latest_price": latest_price,
             "latest_timestamp": latest_timestamp,
+            "data_source": data_source,
             "change_percent": change_percent,
             "confidence": confidence,
             "forecast": [
