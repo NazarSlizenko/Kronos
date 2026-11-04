@@ -1,3 +1,4 @@
+import asyncio
 import json
 import unittest
 from unittest.mock import Mock, patch
@@ -356,3 +357,30 @@ class PredictionEvaluationTests(unittest.TestCase):
 
         self.assertEqual(result, {"checked": 0, "evaluated": 0, "errors": []})
         self.assertEqual(self.session.query(Prediction).one().status, "awaiting_actual")
+
+    def test_prediction_can_be_deleted_from_history(self):
+        prediction = Prediction(
+            ticker="BTC-USD",
+            period="5d",
+            interval="1h",
+            latest_price=100.0,
+            change_percent=1.0,
+            status="awaiting_actual",
+            result_summary="{}",
+        )
+        self.session.add(prediction)
+        self.session.commit()
+        prediction_id = prediction.id
+
+        result = asyncio.run(main_module.delete_prediction(prediction_id, "admin", self.session))
+
+        self.assertEqual(result, {"deleted": True, "id": prediction_id})
+        self.assertIsNone(self.session.query(Prediction).filter_by(id=prediction_id).first())
+
+    def test_deleting_unknown_prediction_returns_not_found(self):
+        from fastapi import HTTPException
+
+        with self.assertRaises(HTTPException) as error:
+            asyncio.run(main_module.delete_prediction(999, "admin", self.session))
+
+        self.assertEqual(error.exception.status_code, 404)

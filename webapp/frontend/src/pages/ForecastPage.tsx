@@ -1,6 +1,6 @@
 import { isAxiosError } from 'axios';
 import { useMemo, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 import { formatMarketPrice, getTickerList, predictTicker, type ForecastPoint } from '../services/api';
@@ -14,6 +14,7 @@ const defaultForm = {
 
 export function ForecastPage() {
   const [form, setForm] = useState(defaultForm);
+  const queryClient = useQueryClient();
 
   const { data: tickers = [] } = useQuery({
     queryKey: ['tickers'],
@@ -22,6 +23,12 @@ export function ForecastPage() {
 
   const mutation = useMutation({
     mutationFn: predictTicker,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['dashboard-predictions'] }),
+        queryClient.invalidateQueries({ queryKey: ['analytics-predictions'] }),
+      ]);
+    },
   });
   const errorMessage = isAxiosError<{ detail?: string }>(mutation.error)
     ? mutation.error.response?.data?.detail ?? mutation.error.message
@@ -35,25 +42,27 @@ export function ForecastPage() {
       return [];
     }
 
-    const observedTimestamp = new Date(mutation.data.latest_timestamp).toLocaleString('ru-RU', {
+    const labelFor = (timestamp: string) => new Date(timestamp).toLocaleString('ru-RU', {
       day: '2-digit',
       month: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
     });
     return [
-      {
-        label: observedTimestamp,
-        actualClose: Number(mutation.data.latest_price),
-        forecastClose: Number(mutation.data.latest_price),
-      },
+      ...mutation.data.history.map((point) => ({
+        label: labelFor(point.timestamp),
+        actualClose: Number(point.close),
+        forecastClose: null,
+      })),
+      ...(mutation.data.history.length
+        ? [{
+            label: labelFor(mutation.data.latest_timestamp),
+            actualClose: Number(mutation.data.latest_price),
+            forecastClose: Number(mutation.data.latest_price),
+          }]
+        : []),
       ...forecast.map((point: ForecastPoint) => ({
-        label: new Date(point.timestamp).toLocaleString('ru-RU', {
-          day: '2-digit',
-          month: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
+        label: labelFor(point.timestamp),
         actualClose: null,
         forecastClose: Number(point.close),
       })),
@@ -194,7 +203,7 @@ export function ForecastPage() {
 
         <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <div className="flex items-center justify-between gap-3">
-            <h3 className="text-xl font-semibold text-white">Котировка и прогноз</h3>
+            <h3 className="text-xl font-semibold text-white">История цены и прогноз Kronos</h3>
             {mutation.data ? (
               <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs text-emerald-300">
                 Точность не калибрована
@@ -242,7 +251,7 @@ export function ForecastPage() {
       {mutation.data && (
         <div className="grid gap-4 md:grid-cols-3">
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-            <p className="text-sm text-slate-400">Цена закрытия последней свечи</p>
+            <p className="text-sm text-slate-400">Последняя фактическая цена закрытия</p>
             <p className="mt-2 text-2xl font-semibold text-white">
               {formatMarketPrice(mutation.data.ticker, mutation.data.latest_price)}
             </p>

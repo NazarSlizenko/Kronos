@@ -60,11 +60,12 @@ export const formatMarketPrice = (ticker: string, price: number) => {
 
 export const getLatestMarketQuote = async (
   ticker: string,
+  interval = '1h',
 ): Promise<MarketQuote> => {
   const headers = await authHeaders();
   const response = await api.get(`/api/market/${encodeURIComponent(ticker)}`, {
     headers,
-    params: { period: '5d', interval: '1h' },
+    params: { period: '5d', interval },
   });
   return response.data;
 };
@@ -99,12 +100,21 @@ export interface PredictionRecord {
   status: string;
   created_at?: string | null;
   evaluation?: PredictionEvaluation | null;
+  result_summary?: {
+    history?: { timestamp: string; close: number }[];
+    forecast?: ForecastPoint[];
+  } | null;
 }
 
 export const getPredictions = async (): Promise<PredictionRecord[]> => {
   const headers = await authHeaders();
   const response = await api.get('/api/predictions', { headers });
   return response.data ?? [];
+};
+
+export const deletePrediction = async (id: number) => {
+  const headers = await authHeaders();
+  await api.delete(`/api/predictions/${id}`, { headers });
 };
 
 export const evaluatePredictions = async () => {
@@ -135,6 +145,7 @@ export interface PredictionResponse {
   change_percent: number;
   confidence: number | null;
   evaluation: PredictionEvaluation;
+  history: { timestamp: string; close: number }[];
   forecast: ForecastPoint[];
 }
 

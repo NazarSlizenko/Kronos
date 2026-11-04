@@ -38,6 +38,7 @@ class PredictResponse(BaseModel):
     change_percent: float
     confidence: float | None
     evaluation: dict[str, str | float]
+    history: list[dict[str, str | float]]
     forecast: list[dict]
 
 
@@ -297,6 +298,20 @@ async def remove_favorite(ticker: str, username: str = Depends(get_current_user)
     return {"deleted": True, "ticker": ticker.upper()}
 
 
+@app.delete("/api/predictions/{prediction_id}")
+async def delete_prediction(
+    prediction_id: int,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    prediction = db.query(Prediction).filter(Prediction.id == prediction_id).first()
+    if prediction is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Прогноз не найден")
+    db.delete(prediction)
+    db.commit()
+    return {"deleted": True, "id": prediction_id}
+
+
 @app.post("/api/predict", response_model=PredictResponse)
 async def predict(request: PredictRequest, username: str = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
@@ -325,6 +340,13 @@ async def predict(request: PredictRequest, username: str = Depends(get_current_u
             "data_source": data_source,
             "change_percent": change_percent,
             "confidence": confidence,
+            "history": [
+                {
+                    "timestamp": row["timestamps"].isoformat(),
+                    "close": float(row["close"]),
+                }
+                for _, row in data.tail(120).iterrows()
+            ],
             "evaluation": {
                 "status": "awaiting_actual",
                 "target_timestamp": str(forecast.index[-1]),

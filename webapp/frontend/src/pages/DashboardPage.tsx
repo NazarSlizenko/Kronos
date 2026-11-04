@@ -18,7 +18,7 @@ export function DashboardPage() {
   });
 
   const { data: predictions = [] } = useQuery({
-    queryKey: ['predictions'],
+    queryKey: ['dashboard-predictions'],
     queryFn: getPredictions,
   });
 
