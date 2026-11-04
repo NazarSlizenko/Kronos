@@ -48,17 +48,35 @@ export function ForecastPage() {
         forecastClose: Number(mutation.data.latest_price),
       },
       ...forecast.map((point: ForecastPoint) => ({
-      label: new Date(point.timestamp).toLocaleString('ru-RU', {
-        day: '2-digit',
-        month: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
+        label: new Date(point.timestamp).toLocaleString('ru-RU', {
+          day: '2-digit',
+          month: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
         actualClose: null,
         forecastClose: Number(point.close),
       })),
     ];
   }, [mutation.data]);
+
+  const priceDomain = useMemo((): [number, number] | ['auto', 'auto'] => {
+    const prices = chartData.flatMap((point) => [point.actualClose, point.forecastClose])
+      .filter((price): price is number => price !== null && Number.isFinite(price));
+    if (!prices.length) {
+      return ['auto', 'auto'];
+    }
+
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+    const padding = Math.max((max - min) * 0.1, max * 0.0005, Number.EPSILON);
+    return [Math.max(0, min - padding), max + padding];
+  }, [chartData]);
+
+  const formatPriceTick = (value: number) => {
+    const formatted = Number(value).toLocaleString('ru-RU', { maximumFractionDigits: 2 });
+    return form.ticker.endsWith('=X') ? formatted : `$${formatted}`;
+  };
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -192,8 +210,18 @@ export function ForecastPage() {
                 <LineChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
                   <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
                   <XAxis dataKey="label" stroke="#94a3b8" tick={{ fontSize: 10 }} />
-                  <YAxis stroke="#94a3b8" tick={{ fontSize: 10 }} />
-                  <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 12 }} />
+                  <YAxis
+                    type="number"
+                    domain={priceDomain}
+                    tickFormatter={formatPriceTick}
+                    stroke="#94a3b8"
+                    tick={{ fontSize: 10 }}
+                    width={88}
+                  />
+                  <Tooltip
+                    formatter={(value) => [formatPriceTick(Number(value)), 'Цена']}
+                    contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 12 }}
+                  />
                   <Line type="monotone" dataKey="actualClose" name="Последняя свеча" stroke="#38bdf8" strokeWidth={2} dot={{ r: 4 }} connectNulls={false} />
                   <Line type="monotone" dataKey="forecastClose" name="Прогноз Kronos" stroke="#8b5cf6" strokeWidth={3} dot={false} />
                 </LineChart>
