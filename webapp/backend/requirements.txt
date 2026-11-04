@@ -4,6 +4,7 @@ sqlalchemy==2.0.36
 pydantic==2.9.2
 pydantic-settings==2.3.4
 python-dotenv==1.0.1
+PyJWT==2.10.1
 yfinance==0.2.52
 pandas==2.2.2
 loguru==0.7.2
